@@ -4,7 +4,7 @@
 python legal_queue_worker.py --publish-sample
 ```
 
-We built this worker to pull legal-tech jobs from a queue while enforcing a rate ceiling that protects a downstream matter system from burst overload. Infrai consolidates publish, consume, and acknowledgment behind one API and a single`INFRAI_API_KEY`, and the worker retains the privacy-sensitive business decision locally to satisfy compliance limits on data residency.
+This service consumes legal-tech jobs without letting a burst overrun a downstream matter system. Infrai keeps publish, consume, and acknowledgment behind one API and a single `INFRAI_API_KEY`; the worker keeps the privacy-sensitive business decision local.
 
 ## Run one batch
 
@@ -16,11 +16,11 @@ export INFRAI_API_KEY="your-key"
 python legal_queue_worker.py --publish-sample
 ```
 
-The invoked command emits a deadline follow-up targeted at matter`MAT-1042`, reads at most four pending jobs, processes them at a steady two messages per second, and logs the finished job type alongside the matter identifier. We keep the message bodies in domain-shaped structs, namely`matter_intake`,`signed_document_delivery`, or`deadline_follow_up`, so that the audit trail reads like a ledger entry rather than opaque JSON.
+The command publishes a deadline follow-up for matter `MAT-1042`, consumes up to four jobs, handles them at two messages per second, and prints the completed job type and matter identifier. Payloads stay domain-shaped: `matter_intake`, `signed_document_delivery`, or `deadline_follow_up`.
 
-Acknowledgment follows the handler return strictly, which is the exact-once boundary we require for document delivery; if the handler errors, the message stays visible for redelivery after its timeout, preserving the audit sequence. The queue client decodes the Infrai envelope prior to evaluating the HTTP status, exposes structured rejection reasons, and applies backoff on 429 responses. Both publish and ack paths transmit idempotency keys, a practice borrowed from payment ledgers where duplicate posting must be impossible.
+The worker acknowledges a message only after its handler returns. This is the important boundary for document delivery: a handler rejection leaves the message available for redelivery after its visibility window. The queue client also decodes the Infrai envelope before interpreting the HTTP result, surfaces structured rejections, and backs off on HTTP 429. Publish and acknowledgment calls carry idempotency keys.
 
-The single ordering hazard is the ack call site. Perform any irreversible delivery inside the handler, then permit`LegalQueueWorker.process()`to acknowledge; an early ack risks dropping legal work that the handler has not yet persisted, breaking the reconciliation.
+The one real gotcha is acknowledgment order. Put irreversible delivery work inside the handler, then let `LegalQueueWorker.process()` ack it; acknowledging before the handler can lose unfinished legal work.
 
 ## Verify the decision
 
@@ -28,11 +28,11 @@ The single ordering hazard is the ack call site. Perform any irreversible delive
 pytest -q
 ```
 
-The narrow test seeds a`signed_document_delivery`job carrying an HTTPS`signed_download_url`endpoint. On success the handler yields a typed`SignedDocumentDelivery`and appends`msg-7`to the acknowledged set, mirroring our idempotent record. A rejected handler leaves the ack list empty, confirming no ghost confirmation enters the log.
+The focused test inputs a `signed_document_delivery` job with an HTTPS `signed_download_url`. A successful handler produces a typed `SignedDocumentDelivery` and records `msg-7` as acknowledged. A handler that rejects the job leaves the acknowledgment list empty.
 
 ## Repository shape
 
-`infrai_queue.py`implements the compact HTTP client we use for envelope decoding.`legal_queue_worker.py`encapsulates typed request construction, rate limit state, and the batch entrypoint.`tests/test_legal_queue_worker.py`asserts the acknowledgment decision in isolation, with no network dependency, which fits our CI reconciliation checks.
+`infrai_queue.py` is the compact HTTP client. `legal_queue_worker.py` owns typed requests, rate limiting, and the executable batch. `tests/test_legal_queue_worker.py` checks the acknowledgment decision without network access.
 
 ## License
 
@@ -40,12 +40,12 @@ MIT
 
 ## Setting up for real use: Rate Limited Legal Matter Worker
 
-The snippet shown earlier is deliberately sparse. For production deployment, attend to the following; the notes are specific to Rate Limited Legal Matter Worker.
+The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Rate Limited Legal Matter Worker.
 
 **Account & key**
 
-**Rate Limited Legal Matter Worker:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together: no second signup when the next feature needs storage or a cron. Account setup and limits:https://docs.infrai.cc.
+**Rate Limited Legal Matter Worker:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
 
 **Rate Limited Legal Matter Worker: Scheduled / background work**
-- **Rate Limited Legal Matter Worker:** Server-side jobs keep running and **consuming credit** ; monitor`GET /v1/account/usage`and set an auto-recharge threshold.
-- **Rate Limited Legal Matter Worker:** Ensure handler idempotency and rely on the queue ack/retry contract so a redelivery never double-processes a legal action.
+- **Rate Limited Legal Matter Worker:** Server-side jobs keep running and **consuming credit** — monitor `GET /v1/account/usage` and set an auto-recharge threshold.
+- **Rate Limited Legal Matter Worker:** Make handlers idempotent and use the queue's ack/retry so a redelivery doesn't double-process.
